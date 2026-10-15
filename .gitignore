@@ -1,0 +1,23 @@
+# Entornos virtuales de Python
+.venv/
+env/
+venv/
+ENV/
+*.pyc
+__pycache__/
+
+# Caché y artefactos de pruebas
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Caché interna del simulador
+industrial_electrification/.cache/
+
+# Archivos de configuración de IDEs
+.vscode/
+.idea/
+
+# Archivos temporales o logs
+*.log
+*.tmp
