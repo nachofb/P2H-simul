@@ -103,10 +103,24 @@ def validate_scenario(cfg: ScenarioConfig, bundle: Optional[DataBundle]) -> Vali
         return rep
     if sup.adjustment_price_mode == "hourly_series" and bundle.adjustment_values is None:
         rep.errors.append("Servicios de ajuste en modo serie horaria pero no se ha cargado el archivo.")
-    if sup.network_tariff.replace(" ", "").upper() not in bundle.network_tariffs.index:
+    tariff_table = (
+        bundle.network_tariffs_electrointensive
+        if sup.is_electrointensive and bundle.network_tariffs_electrointensive is not None
+        else bundle.network_tariffs
+    )
+    if sup.network_tariff.replace(" ", "").upper() not in tariff_table.index:
         rep.errors.append(f"Tarifa {sup.network_tariff} no presente en el archivo de peajes.")
+    if sup.is_electrointensive:
+        if bundle.network_tariffs_electrointensive is None:
+            rep.warnings.append("Consumidor electrointensivo activado pero no se ha cargado el archivo de peajes electrointensivos.")
+        else:
+            rep.info.append("Peajes y cargos de consumidor electrointensivo activados.")
+
     for i, year in enumerate(sim.simulated_years_list):
-        data_year = (sup.pool_price_year + i) if sup.pool_price_year else year
+        if str(sup.pool_price_scenario).strip().upper() == "REAL":
+            data_year: int | str = "LTM"
+        else:
+            data_year = (sup.pool_price_year + i) if sup.pool_price_year else year
         try:
             _, notes = pool_price_series_for_year(
                 bundle.pool, data_year, sup.pool_price_scenario, target_year=year,

@@ -77,7 +77,10 @@ def build_electricity_supply(
     year = int(calendar_df["year"].iloc[0])
     n = len(calendar_df)
     notes: list[str] = []
-    data_year = (supply.pool_price_year + year_index) if supply.pool_price_year else year
+    if str(supply.pool_price_scenario).strip().upper() == "REAL":
+        data_year: int | str = "LTM"
+    else:
+        data_year = (supply.pool_price_year + year_index) if supply.pool_price_year else year
     pool, pool_notes = pool_price_series_for_year(
         bundle.pool, data_year, supply.pool_price_scenario, target_year=year,
         fill_authorized=supply.pool_missing_data_fill_authorized,
@@ -96,7 +99,13 @@ def build_electricity_supply(
         adjustment, adj_notes = adjustment_series_for_year(bundle.adjustment_values, year)
         notes += adj_notes
 
-    tariff_by_period = network_tariff_for(bundle.network_tariffs, supply.network_tariff)
+    if supply.is_electrointensive and bundle.network_tariffs_electrointensive is not None:
+        tariff_table = bundle.network_tariffs_electrointensive
+        notes.append("Aplicados peajes y cargos reducidos para consumidor electrointensivo.")
+    else:
+        tariff_table = bundle.network_tariffs
+
+    tariff_by_period = network_tariff_for(tariff_table, supply.network_tariff)
     period = calendar_df["tariff_period"].to_numpy()
     network = np.array([tariff_by_period[int(p)] for p in period], dtype=float)
     goo = supply.guarantees_of_origin_cost_eur_per_mwh_e if supply.guarantees_of_origin_enabled else 0.0

@@ -150,6 +150,9 @@ class ElectricitySupplyInputs(_Base):
     adjustment_price_mode: Literal["fixed", "hourly_series"] = "hourly_series"
     adjustment_fixed_eur_per_mwh_e: float = 0.0
     network_tariff: Literal["6.1TD", "6.2TD", "6.3TD", "6.4TD"] = "6.1TD"
+    is_electrointensive: bool = Field(
+        False, description="True = aplicar tarifas reducidas de peajes y cargos para consumidores electrointensivos"
+    )
     guarantees_of_origin_enabled: bool = False
     guarantees_of_origin_cost_eur_per_mwh_e: float = Field(0.0, ge=0)
     grid_other_cost_eur_per_mwh_e: float = 0.0
@@ -202,7 +205,9 @@ class InnovationFundInputs(_Base):
     innovation_fund_reference_tco2_per_mwh_th: float = Field(
         config.DEFAULT_INNOVATION_FUND_REFERENCE_TCO2_PER_MWH_TH, ge=0
     )
-    innovation_fund_duration_years: int = Field(10, ge=1, le=60)
+    innovation_fund_duration_years: int = Field(
+        config.DEFAULT_INNOVATION_FUND_DURATION_YEARS, ge=1, le=60
+    )
     innovation_fund_start_year: Optional[int] = Field(
         None, description="Año de inicio. None = año inicial de la simulación."
     )

@@ -244,13 +244,28 @@ with tab_inputs:
         st.markdown("##### Precios del Mercado Eléctrico")
         col_e1, col_e2, col_e3 = st.columns(3)
         with col_e1:
-            scenarios = st.session_state.bundle.pool.scenarios if st.session_state.bundle else ["AURORA CENTRAL"]
-            cfg.supply.pool_price_scenario = st.selectbox("Escenario de precios Pool:", options=scenarios, index=0)
+            scenarios = st.session_state.bundle.pool.scenarios if st.session_state.bundle else ["AURORA CENTRAL", "REAL"]
+            default_scen = cfg.supply.pool_price_scenario if cfg.supply.pool_price_scenario in scenarios else ("AURORA CENTRAL" if "AURORA CENTRAL" in scenarios else scenarios[0])
+            cfg.supply.pool_price_scenario = st.selectbox(
+                "Escenario de precios Pool:",
+                options=scenarios,
+                index=scenarios.index(default_scen),
+                format_func=lambda s: f"{s} (Últimos 12 meses)" if s == "REAL" else s,
+            )
+            if cfg.supply.pool_price_scenario == "REAL":
+                st.caption("ℹ️ Curva real de precios de los últimos 12 meses (LTM).")
             cfg.supply.pool_price_scaling_factor = st.number_input(
                 "Multiplicador de sensibilidad pool (1.0 = normal):", min_value=0.0, value=cfg.supply.pool_price_scaling_factor, step=0.1
             )
         with col_e2:
             cfg.supply.network_tariff = st.selectbox("Tarifa de acceso:", options=["6.1TD", "6.2TD", "6.3TD", "6.4TD"], index=0)
+            cfg.supply.is_electrointensive = st.checkbox(
+                "Consumidor electrointensivo",
+                value=cfg.supply.is_electrointensive,
+                help="Aplica los peajes y cargos reducidos para consumidores electrointensivos (según network_tariffs_electrointensive.xlsx).",
+            )
+            if cfg.supply.is_electrointensive:
+                st.caption("ℹ️ Aplicando peajes y cargos reducidos para consumidor electrointensivo.")
             cfg.supply.adjustment_price_mode = st.radio(
                 "Servicios de ajuste:", options=["hourly_series", "fixed"], format_func=lambda x: "Serie horaria archivo" if x == "hourly_series" else "Valor fijo anual"
             )

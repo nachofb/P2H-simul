@@ -253,3 +253,40 @@ def test_financial_indicators():
     irr = compute_irr([-100.0, 30.0, 40.0, 50.0])
     assert irr is not None
     assert pytest.approx(irr, 0.5) == 8.9  # ~8.9%
+
+
+def test_electrointensive_and_ltm_real():
+    from data.loaders import load_data_bundle
+    from models.inputs import ScenarioConfig
+    from supply.electricity_supply import build_electricity_supply
+    from data.calendar import build_calendar
+
+    bundle = load_data_bundle(use_cache=True)
+    assert bundle.network_tariffs_electrointensive is not None
+    assert "REAL" in bundle.pool.scenarios
+    assert "LTM" in bundle.pool.years
+
+    # 1. Verificar peajes electrointensivos frente a estándar
+    cfg = ScenarioConfig()
+    cfg.supply.network_tariff = "6.1TD"
+    cfg.supply.pool_missing_data_fill_authorized = True
+    cal = build_calendar(2027)
+
+    # Estándar
+    cfg.supply.is_electrointensive = False
+    supply_std, _ = build_electricity_supply(cfg.supply, cal, bundle)
+
+    # Electrointensivo
+    cfg.supply.is_electrointensive = True
+    supply_electro, notes_electro = build_electricity_supply(cfg.supply, cal, bundle)
+
+    # Peajes electrointensivos deben ser inferiores a los estándar
+    assert supply_electro["network_tariff_eur_per_mwh_e"].mean() < supply_std["network_tariff_eur_per_mwh_e"].mean()
+    assert any("electrointensivo" in n.lower() for n in notes_electro)
+
+    # 2. Verificar escenario REAL (LTM)
+    cfg.supply.pool_price_scenario = "REAL"
+    supply_real, notes_real = build_electricity_supply(cfg.supply, cal, bundle)
+    assert len(supply_real) == len(cal)
+    assert any("LTM" in n for n in notes_real)
+

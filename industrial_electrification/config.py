@@ -20,6 +20,7 @@ CACHE_DIR = PROJECT_ROOT / ".cache"
 
 DEFAULT_POOL_PRICE_FILE = INPUT_DIR / "pool_price_scenarios.xlsx"
 DEFAULT_NETWORK_TARIFF_FILE = INPUT_DIR / "network_tariffs.xlsx"
+DEFAULT_ELECTROINTENSIVE_TARIFF_FILE = INPUT_DIR / "network_tariffs_electrointensive.xlsx"
 DEFAULT_ADJUSTMENT_FILE = INPUT_DIR / "escenario_servicios_ajustes.csv"
 
 # ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ FEB_28_FIRST_HOUR_INDEX = 58 * HOURS_PER_DAY  # 1392
 DEFAULT_GAS_EMISSION_FACTOR_TCO2_PER_MWH_HHV = 0.1802
 DEFAULT_LHV_HHV_RATIO = 0.90
 DEFAULT_INNOVATION_FUND_REFERENCE_TCO2_PER_MWH_TH = 0.224
+DEFAULT_INNOVATION_FUND_DURATION_YEARS = 5
 
 # ---------------------------------------------------------------------------
 # Tarifas de acceso 6.xTD (Península) - Circular CNMC 3/2020

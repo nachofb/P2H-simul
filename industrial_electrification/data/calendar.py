@@ -30,11 +30,14 @@ import pandas as pd
 import config
 
 
-def is_leap_year(year: int) -> bool:
-    return _stdlib_calendar.isleap(year)
+def is_leap_year(year: int | str) -> bool:
+    try:
+        return _stdlib_calendar.isleap(int(year))
+    except (ValueError, TypeError):
+        return False
 
 
-def hours_in_year(year: int, time_step_hours: float = 1.0) -> int:
+def hours_in_year(year: int | str, time_step_hours: float = 1.0) -> int:
     days = 366 if is_leap_year(year) else 365
     return int(round(days * config.HOURS_PER_DAY / time_step_hours))
 

@@ -281,13 +281,15 @@ class PoolPriceTable:
     """Tabla de precios pool en bruto (por posición), indexada por (año, escenario)."""
 
     source_name: str
-    series: dict[tuple[int, str], np.ndarray]
+    series: dict[tuple[int | str, str], np.ndarray]
     n_positions: int
     detection_notes: list[str] = field(default_factory=list)
 
     @property
-    def years(self) -> list[int]:
-        return sorted({y for y, _ in self.series})
+    def years(self) -> list[int | str]:
+        int_years = sorted({y for y, _ in self.series if isinstance(y, int)})
+        str_years = sorted({y for y, _ in self.series if isinstance(y, str)})
+        return int_years + str_years
 
     @property
     def scenarios(self) -> list[str]:
@@ -300,7 +302,11 @@ class PoolPriceTable:
     def coverage(self) -> pd.DataFrame:
         """Resumen de completitud por año y escenario."""
         rows = []
-        for (y, s), arr in sorted(self.series.items()):
+        def _sort_key(item):
+            (y, s) = item[0]
+            return (0, y, s) if isinstance(y, int) else (1, str(y), s)
+
+        for (y, s), arr in sorted(self.series.items(), key=_sort_key):
             valid = ~np.isnan(arr)
             first = int(np.argmax(valid)) + 1 if valid.any() else None
             last = int(len(arr) - np.argmax(valid[::-1])) if valid.any() else None
@@ -316,9 +322,13 @@ class PoolPriceTable:
             )
         return pd.DataFrame(rows)
 
-    def add_scenario(self, year: int, scenario: str, values) -> None:
+    def add_scenario(self, year: int | str, scenario: str, values) -> None:
         """Permite incorporar nuevos escenarios (p. ej. desde la interfaz)."""
-        self.series[(int(year), str(scenario).strip().upper())] = np.asarray(values, dtype=float)
+        try:
+            y_key: int | str = int(year)
+        except (ValueError, TypeError):
+            y_key = str(year).strip().upper()
+        self.series[(y_key, str(scenario).strip().upper())] = np.asarray(values, dtype=float)
 
 
 def _parse_pool_frame(raw: pd.DataFrame, source_name: str) -> PoolPriceTable:
@@ -328,8 +338,18 @@ def _parse_pool_frame(raw: pd.DataFrame, source_name: str) -> PoolPriceTable:
         vals = raw.iloc[i, 1:].tolist()
         nums = [parse_number(v) for v in vals]
         nonnull = [v for v in vals if v is not None and not (isinstance(v, float) and math.isnan(v))]
-        years = [n for n in nums if not math.isnan(n) and float(n).is_integer() and 1900 <= n <= 2200]
-        if nonnull and len(years) >= 0.8 * len(nonnull):
+        # Buscar fila de años numéricos (o etiquetas tipo 'LTM')
+        years = [
+            n for n in nums
+            if not math.isnan(n) and float(n).is_integer() and 1900 <= n <= 2200
+        ]
+        # También considerar strings que sean años o etiquetas especiales
+        year_tokens = [
+            v for v in vals
+            if str(v).strip().isdigit() and 1900 <= int(str(v).strip()) <= 2200
+            or "LTM" in str(v).upper()
+        ]
+        if nonnull and (len(years) >= 0.7 * len(nonnull) or len(year_tokens) >= 0.7 * len(nonnull)):
             year_row = i
             break
     if year_row is None:
@@ -345,22 +365,29 @@ def _parse_pool_frame(raw: pd.DataFrame, source_name: str) -> PoolPriceTable:
         raise DataFormatError("Pool: no se identifica la fila de escenarios.")
     notes.append(f"Fila de años: {year_row + 1}; fila de escenarios: {scen_row + 1}; datos desde fila {scen_row + 2}.")
 
-    years_raw = [parse_number(v) for v in raw.iloc[year_row, 1:].tolist()]
-    # Celdas combinadas: propagar el año hacia la derecha.
-    years_ff: list[float] = []
-    last = math.nan
+    years_raw = raw.iloc[year_row, 1:].tolist()
+    # Celdas combinadas: propagar el año/etiqueta hacia la derecha.
+    years_ff: list[str | int] = []
+    last: str | int = None
     for y in years_raw:
-        last = y if not math.isnan(y) else last
+        if y is not None and not (isinstance(y, float) and math.isnan(y)):
+            num_y = parse_number(y)
+            if not math.isnan(num_y) and float(num_y).is_integer():
+                last = int(num_y)
+            else:
+                last = str(y).strip().upper()
         years_ff.append(last)
+
     scenarios = raw.iloc[scen_row, 1:].tolist()
     data = raw.iloc[scen_row + 1:, 1:]
-    series: dict[tuple[int, str], np.ndarray] = {}
+    series: dict[tuple[int | str, str], np.ndarray] = {}
     for j, (y, s) in enumerate(zip(years_ff, scenarios)):
-        if math.isnan(y) or s is None or (isinstance(s, float) and math.isnan(s)):
+        if y is None or s is None or (isinstance(s, float) and math.isnan(s)):
             continue
-        key = (int(y), str(s).strip().upper())
+        key = (y, str(s).strip().upper())
         if key in series:
-            raise DataFormatError(f"Pool: columna duplicada para {key}.")
+            # Si hay duplicado advertir o ignorar
+            continue
         series[key] = to_numeric_array(data.iloc[:, j].tolist())
     if not series:
         raise DataFormatError("Pool: no se han encontrado columnas de precios.")
@@ -394,13 +421,13 @@ def read_pool_price_workbook(
 
 def pool_price_series_for_year(
     table: PoolPriceTable,
-    data_year: int,
+    data_year: int | str,
     scenario: str,
     target_year: Optional[int] = None,
     fill_authorized: bool = False,
     max_fill_hours: int = config.DEFAULT_POOL_MAX_FILL_HOURS,
 ) -> tuple[np.ndarray, list[str]]:
-    """Extrae y valida la serie pool de ``data_year`` para el calendario de ``target_year``.
+    """Extrae y valida la serie pool de ``data_year`` (año o 'LTM') para el calendario de ``target_year``.
 
     Interpretación posicional (validada con el archivo suministrado): la
     posición 1 es el 1 de enero 00:00-01:00 y las posiciones siguen el
@@ -408,15 +435,29 @@ def pool_price_series_for_year(
     posiciones se interpreta como calendario bisiesto normalizado y se retiran
     las 24 posiciones del 29 de febrero.
     """
-    target_year = target_year or data_year
-    key = (int(data_year), str(scenario).strip().upper())
+    scen_clean = str(scenario).strip().upper()
+    yr_key: int | str
+    try:
+        yr_key = int(data_year)
+    except (ValueError, TypeError):
+        yr_key = str(data_year).strip().upper()
+
+    # Si el usuario eligió LTM como escenario o como año, emparejar con ('LTM', 'REAL')
+    key = (yr_key, scen_clean)
     if key not in table.series:
-        raise DataFormatError(
-            f"Pool: no existe el escenario '{scenario}' para el año {data_year}. "
-            f"Escenarios: {table.scenarios}; años: {table.years[0]}-{table.years[-1]}."
-        )
+        if scen_clean in ("LTM", "REAL") and ("LTM", "REAL") in table.series:
+            key = ("LTM", "REAL")
+        elif yr_key == "LTM" and ("LTM", "REAL") in table.series:
+            key = ("LTM", "REAL")
+        else:
+            raise DataFormatError(
+                f"Pool: no existe el escenario '{scenario}' para el año {data_year}. "
+                f"Escenarios: {table.scenarios}; años: {table.years}."
+            )
+
+    target_year = target_year or (yr_key if isinstance(yr_key, int) else 2027)
     raw = table.series[key]
-    label = f"Pool {key[1]} {data_year}"
+    label = f"Pool {key[1]} {key[0]}"
     notes: list[str] = []
     valid = ~np.isnan(raw)
     if not valid.any():
@@ -436,8 +477,7 @@ def pool_price_series_for_year(
             "No se sustituyen por cero."
         )
     n = len(body)
-    # Calendario bisiesto normalizado en un año no bisiesto -> retirar 29-feb.
-    data_leap = is_leap_year(data_year)
+    data_leap = is_leap_year(yr_key) if isinstance(yr_key, int) else False
     if not data_leap and n > 8760:
         if n > 8784:
             raise DataFormatError(f"{label}: {n} valores (> 8784).")
@@ -445,7 +485,7 @@ def pool_price_series_for_year(
         body = np.concatenate([body[:i29], body[i29 + 24:]])
         notes.append(f"{label}: detectado calendario bisiesto normalizado; retiradas posiciones 29-feb.")
         n = len(body)
-    expected_data = hours_in_year(data_year)
+    expected_data = hours_in_year(yr_key) if isinstance(yr_key, int) else 8760
     if n > expected_data:
         raise DataFormatError(f"{label}: {n} valores; se esperaban {expected_data}.")
     missing = expected_data - n
@@ -486,6 +526,7 @@ class DataBundle:
     pool: PoolPriceTable
     network_tariffs: pd.DataFrame
     adjustment_values: Optional[np.ndarray]
+    network_tariffs_electrointensive: Optional[pd.DataFrame] = None
     sources: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -494,10 +535,17 @@ def load_data_bundle(
     pool_source: PathOrBuffer = config.DEFAULT_POOL_PRICE_FILE,
     tariff_source: PathOrBuffer = config.DEFAULT_NETWORK_TARIFF_FILE,
     adjustment_source: Optional[PathOrBuffer] = config.DEFAULT_ADJUSTMENT_FILE,
+    electrointensive_tariff_source: Optional[PathOrBuffer] = config.DEFAULT_ELECTROINTENSIVE_TARIFF_FILE,
     use_cache: bool = True,
 ) -> DataBundle:
     pool = read_pool_price_workbook(pool_source, use_cache=use_cache)
     tariffs = read_network_tariffs(tariff_source)
+    tariffs_electro = None
+    if electrointensive_tariff_source is not None:
+        try:
+            tariffs_electro = read_network_tariffs(electrointensive_tariff_source)
+        except Exception as e:
+            pass
     adjustment = None
     notes = list(pool.detection_notes)
     if adjustment_source is not None:
@@ -511,9 +559,11 @@ def load_data_bundle(
         pool=pool,
         network_tariffs=tariffs,
         adjustment_values=adjustment,
+        network_tariffs_electrointensive=tariffs_electro,
         sources={
             "pool": str(pool_source) if isinstance(pool_source, (str, Path)) else "upload",
             "tariffs": str(tariff_source) if isinstance(tariff_source, (str, Path)) else "upload",
+            "electrointensive_tariffs": str(electrointensive_tariff_source) if isinstance(electrointensive_tariff_source, (str, Path)) else "upload",
             "adjustment": str(adjustment_source) if isinstance(adjustment_source, (str, Path)) else "upload",
         },
         notes=notes,
