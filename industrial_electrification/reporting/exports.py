@@ -93,6 +93,12 @@ def export_scenario_to_excel(
         if scenario_res.first_year and scenario_res.first_year.by_period is not None:
             scenario_res.first_year.by_period.to_excel(writer, sheet_name="Periodos Tarifarios P1-P6", index=False)
 
+        # 5b. Estadísticas de Precios Eléctricos (Pool vs Precio Completo: Media, P10, P50, P90)
+        if scenario_res.first_year and scenario_res.first_year.price_stats is not None:
+            scenario_res.first_year.price_stats.to_excel(
+                writer, sheet_name="Precios Eléctricos P10-P50-P90", index=False
+            )
+
         # 6. Desglose Mensual (Año 1)
         if scenario_res.first_year and scenario_res.first_year.monthly is not None:
             scenario_res.first_year.monthly.to_excel(writer, sheet_name="Desglose Mensual", index=False)

@@ -33,9 +33,13 @@ from optimization.sizing import (
     optimize_tes_sizing,
     run_sensitivity_analysis,
 )
+import importlib
+import reporting.dashboards
+importlib.reload(reporting.dashboards)
 from reporting.dashboards import (
     plot_cash_flow_evolution,
     plot_electricity_dispatch,
+    plot_electricity_price_stats,
     plot_electrification_cost_curve,
     plot_lcoh_comparison,
     plot_tes_soc_profile,
@@ -48,6 +52,7 @@ from results.comparisons import (
     compute_electrification_cost_curve,
     run_simulation,
 )
+from supply.electricity_supply import compute_electricity_price_stats
 
 # Configuración de página
 st.set_page_config(
@@ -484,10 +489,18 @@ with tab_results:
 
         with col_t2:
             st.markdown("##### Balance Económico")
+            elec_cons_total_mwh = y1.get("annual_grid_consumption_mwh_e", 0.0) + y1.get("annual_pv_consumption_mwh_e", 0.0)
+            elec_cost_total_eur = y1.get("annual_total_electricity_cost_eur", 0.0)
+            captured_price = (
+                y1.get("annual_captured_electricity_price_eur_per_mwh_e")
+                if "annual_captured_electricity_price_eur_per_mwh_e" in y1
+                else ((elec_cost_total_eur / elec_cons_total_mwh) if elec_cons_total_mwh > 0 else 0.0)
+            )
             df_costs = pd.DataFrame(
                 [
                     {"Partida": "Coste línea base (Gas)", "Importe": f"{y1['annual_baseline_cost_eur']:,.0f} €"},
                     {"Partida": "Gasto electricidad (Red + PV)", "Importe": f"{y1['annual_total_electricity_cost_eur']:,.0f} €"},
+                    {"Partida": "Precio eléctrico medio capturado", "Importe": f"{captured_price:.2f} €/MWh-e"},
                     {"Partida": "Gasto gas fósil remanente", "Importe": f"{y1['annual_fossil_total_cost_eur']:,.0f} €"},
                     {"Partida": "Ingresos Innovation Fund", "Importe": f"-{y1['annual_innovation_fund_revenue_eur']:,.0f} €"},
                     {"Partida": "Coste operativo anual proyecto", "Importe": f"{y1['annual_operating_cost_after_incentives_eur']:,.0f} €"},
@@ -515,7 +528,8 @@ with tab_results:
             plot_lcoh_comparison(
                 lcoh_b,
                 lcoh_p,
-                title="LCOH Descontado Plurianual por Componentes de Coste (EUR/MWh-th)",
+                breakdown_proj_year1=y1_p,
+                title="Comparativa de LCOH Descontado y Coste Año 1 por Componentes (EUR/MWh-th)",
             ),
             use_container_width=True,
         )
@@ -579,6 +593,131 @@ with tab_results:
         )
 
         st.dataframe(pd.DataFrame(table_lcoh), hide_index=True, use_container_width=True)
+
+        # Estadísticas del Escenario de Precios Eléctricos (Pool vs. Precio Completo de Red)
+        st.markdown("---")
+        st.subheader("⚡ Estadísticas del Escenario de Precios Eléctricos (EUR/MWh-e)")
+        try:
+            sim_cfg = ScenarioConfig.from_json(res.config_json) if res.config_json else st.session_state.current_scenario
+        except Exception:
+            sim_cfg = st.session_state.current_scenario
+
+        sup_cfg = sim_cfg.supply
+        electro_tag = " (Electrointensivo)" if sup_cfg.is_electrointensive else " (Estándar)"
+        adj_tag = (
+            f"Serie horaria"
+            if sup_cfg.adjustment_price_mode == "hourly_series"
+            else f"Fijo ({sup_cfg.adjustment_fixed_eur_per_mwh_e:.2f} €/MWh-e)"
+        )
+        goo_val = sup_cfg.guarantees_of_origin_cost_eur_per_mwh_e if sup_cfg.guarantees_of_origin_enabled else 0.0
+
+        st.markdown(
+            f"**Escenario Pool:** `{sup_cfg.pool_price_scenario}` ( Factor x{sup_cfg.pool_price_scaling_factor:.2f} ) &nbsp;|&nbsp; "
+            f"**Tarifa de Acceso:** `{sup_cfg.network_tariff}{electro_tag}` &nbsp;|&nbsp; "
+            f"**Servicios de Ajuste:** `{adj_tag}` &nbsp;|&nbsp; "
+            f"**Otros Costes Red:** `{sup_cfg.grid_other_cost_eur_per_mwh_e:.2f} €/MWh-e` &nbsp;|&nbsp; "
+            f"**Garantías de Origen (GdO):** `{goo_val:.2f} €/MWh-e`"
+        )
+        st.caption(
+            "El **Precio Completo de Red (All-in)** en cada hora se compone de: "
+            "**Precio Pool + Peajes y Cargos (6.xTD) + Servicios de Ajuste + Otros Costes de Red + Garantías de Origen**."
+        )
+
+        if len(res.years) > 1:
+            sel_yr_idx = st.selectbox(
+                "Año simulado para estadísticas de precios eléctricos:",
+                options=list(range(len(res.years))),
+                format_func=lambda i: f"Año {i + 1} ({res.years[i].year})",
+                key="price_stats_year_sel",
+            )
+            yr_for_prices = res.years[sel_yr_idx]
+        else:
+            yr_for_prices = res.first_year
+
+        p_stats = getattr(yr_for_prices, "price_stats", None)
+        if p_stats is None and yr_for_prices.hourly is not None and "pool_price_eur_per_mwh_e" in yr_for_prices.hourly.columns:
+            p_stats = compute_electricity_price_stats(yr_for_prices.hourly, yr_for_prices.hourly["tariff_period"])
+
+        if p_stats is not None and not p_stats.empty:
+            ann_row = p_stats.iloc[0]
+            n_hrs = int(ann_row["hours"])
+
+            # Tarjetas resumen anual (8760 h)
+            st.markdown(f"##### Resumen Anual General ({n_hrs:,} horas)")
+            kp1, kp2, kp3, kp4, kp5, kp6, kp7, kp8 = st.columns(8)
+            kp1.metric("Pool — Media", f"{ann_row['pool_mean_eur_per_mwh_e']:.2f} €")
+            kp2.metric("Pool — P10", f"{ann_row['pool_p10_eur_per_mwh_e']:.2f} €")
+            kp3.metric("Pool — P50", f"{ann_row['pool_p50_eur_per_mwh_e']:.2f} €")
+            kp4.metric("Pool — P90", f"{ann_row['pool_p90_eur_per_mwh_e']:.2f} €")
+            kp5.metric(
+                "Precio Completo — Media",
+                f"{ann_row['full_price_mean_eur_per_mwh_e']:.2f} €",
+                delta=f"+{ann_row['full_price_mean_eur_per_mwh_e'] - ann_row['pool_mean_eur_per_mwh_e']:.2f} € vs Pool",
+                delta_color="off",
+            )
+            kp6.metric("Precio Completo — P10", f"{ann_row['full_price_p10_eur_per_mwh_e']:.2f} €")
+            kp7.metric("Precio Completo — P50", f"{ann_row['full_price_p50_eur_per_mwh_e']:.2f} €")
+            kp8.metric("Precio Completo — P90", f"{ann_row['full_price_p90_eur_per_mwh_e']:.2f} €")
+
+            # Dos tablas comparativas lado a lado: Precio Pool vs Precio Completo
+            col_ps1, col_ps2 = st.columns(2)
+            with col_ps1:
+                st.markdown("##### 1. Precio Pool (Mercado Diario) — EUR/MWh-e")
+                df_pool_view = pd.DataFrame(
+                    {
+                        "Periodo": p_stats["period"],
+                        "Horas": p_stats["hours"],
+                        "Average (Media)": p_stats["pool_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                        "P10": p_stats["pool_p10_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                        "P50 (Mediana)": p_stats["pool_p50_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                        "P90": p_stats["pool_p90_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    }
+                )
+                st.dataframe(df_pool_view, hide_index=True, use_container_width=True)
+
+            with col_ps2:
+                st.markdown("##### 2. Precio Completo de Red (All-in) — EUR/MWh-e")
+                df_full_view = pd.DataFrame(
+                    {
+                        "Periodo": p_stats["period"],
+                        "Horas": p_stats["hours"],
+                        "Average (Media)": p_stats["full_price_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                        "P10": p_stats["full_price_p10_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                        "P50 (Mediana)": p_stats["full_price_p50_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                        "P90": p_stats["full_price_p90_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    }
+                )
+                st.dataframe(df_full_view, hide_index=True, use_container_width=True)
+
+            # Tabla integral con todos los componentes de coste y estadísticos
+            st.markdown(
+                "##### 3. Desglose Completo por Periodo: Pool + Peajes y Cargos + Servicios de Ajuste + Otros Costes + GdO (EUR/MWh-e)"
+            )
+            df_breakdown_view = pd.DataFrame(
+                {
+                    "Periodo": p_stats["period"],
+                    "Horas": p_stats["hours"],
+                    "Pool Average": p_stats["pool_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Pool P10": p_stats["pool_p10_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Pool P50": p_stats["pool_p50_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Pool P90": p_stats["pool_p90_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Peajes y Cargos": p_stats["network_tariff_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Ajustes Average": p_stats["adjustment_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Ajustes (P10 / P50 / P90)": [
+                        f"{r['adjustment_p10_eur_per_mwh_e']:.2f} / {r['adjustment_p50_eur_per_mwh_e']:.2f} / {r['adjustment_p90_eur_per_mwh_e']:.2f} €"
+                        for _, r in p_stats.iterrows()
+                    ],
+                    "Otros Costes Red": p_stats["grid_other_cost_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Garantías Origen (GdO)": p_stats["guarantees_of_origin_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Completo Average": p_stats["full_price_mean_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Completo P10": p_stats["full_price_p10_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Completo P50": p_stats["full_price_p50_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                    "Completo P90": p_stats["full_price_p90_eur_per_mwh_e"].map(lambda v: f"{v:.2f} €"),
+                }
+            )
+            st.dataframe(df_breakdown_view, hide_index=True, use_container_width=True)
+
+            st.plotly_chart(plot_electricity_price_stats(p_stats), use_container_width=True)
 
         # Descargas Excel y CSV
         st.subheader("📥 Exportación de Resultados")

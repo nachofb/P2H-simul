@@ -9,6 +9,7 @@ from baseline.gas_reference import fossil_cost_components
 from models.inputs import EboilerInputs, GasBaselineInputs, ScenarioConfig
 from models.results import DispatchResult, YearResult
 from optimization.common import DispatchInputs
+from supply.electricity_supply import compute_electricity_price_stats
 
 
 def compute_eboiler_year_results(
@@ -91,6 +92,7 @@ def compute_eboiler_year_results(
             "pool_price_eur_per_mwh_e": supply_df["pool_price_eur_per_mwh_e"],
             "adjustment_price_eur_per_mwh_e": supply_df["adjustment_price_eur_per_mwh_e"],
             "network_tariff_eur_per_mwh_e": supply_df["network_tariff_eur_per_mwh_e"],
+            "guarantees_of_origin_cost_eur_per_mwh_e": supply_df["guarantees_of_origin_cost_eur_per_mwh_e"],
             "grid_other_cost_eur_per_mwh_e": supply_df["grid_other_cost_eur_per_mwh_e"],
             "grid_unit_cost_eur_per_mwh_e": c_grid,
             "pv_generation_mwh_e": pv_gen,
@@ -177,6 +179,11 @@ def compute_eboiler_year_results(
         "annual_grid_electricity_cost_eur": float(grid_cost.sum()),
         "annual_pv_electricity_cost_eur": float(pv_cost.sum()),
         "annual_total_electricity_cost_eur": float((grid_cost + pv_cost).sum()),
+        "annual_captured_electricity_price_eur_per_mwh_e": (
+            float((grid_cost + pv_cost).sum()) / float(elec_tot.sum())
+            if float(elec_tot.sum()) > 0
+            else 0.0
+        ),
         "annual_fossil_gas_fuel_cost_eur": float(fossil_df["project_fossil_gas_fuel_cost_eur"].sum()),
         "annual_fossil_co2_cost_eur": float(fossil_df["project_fossil_co2_cost_eur"].sum()),
         "annual_fossil_gas_other_cost_eur": float(fossil_df["project_fossil_gas_other_cost_eur"].sum()),
@@ -232,6 +239,8 @@ def compute_eboiler_year_results(
         )
     monthly_df = pd.DataFrame(monthly_rows)
 
+    price_stats_df = compute_electricity_price_stats(supply_df, calendar_df["tariff_period"])
+
     return YearResult(
         year=year,
         alternative="eboiler",
@@ -239,6 +248,7 @@ def compute_eboiler_year_results(
         hourly=hourly,
         annual=annual,
         by_period=by_period_df,
+        price_stats=price_stats_df,
         monthly=monthly_df,
         innovation_fund_active=premium > 0,
         data_notes=notes or [],

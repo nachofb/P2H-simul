@@ -69,6 +69,7 @@ class YearResult:
     hourly: Optional[pd.DataFrame] = None
     annual: dict[str, Any] = field(default_factory=dict)
     by_period: Optional[pd.DataFrame] = None
+    price_stats: Optional[pd.DataFrame] = None
     monthly: Optional[pd.DataFrame] = None
     innovation_fund_active: bool = False
     data_notes: list[str] = field(default_factory=list)

@@ -290,3 +290,71 @@ def test_electrointensive_and_ltm_real():
     assert len(supply_real) == len(cal)
     assert any("LTM" in n for n in notes_real)
 
+
+def test_electricity_price_stats_annual_and_periods():
+    from data.loaders import load_data_bundle
+    from models.inputs import ScenarioConfig
+    from supply.electricity_supply import build_electricity_supply, compute_electricity_price_stats
+    from data.calendar import build_calendar
+
+    bundle = load_data_bundle(use_cache=True)
+    cfg = ScenarioConfig()
+    cfg.supply.network_tariff = "6.1TD"
+    cfg.supply.guarantees_of_origin_enabled = True
+    cfg.supply.guarantees_of_origin_cost_eur_per_mwh_e = 1.5
+    cfg.supply.grid_other_cost_eur_per_mwh_e = 2.0
+    cfg.supply.pool_missing_data_fill_authorized = True
+
+    cal = build_calendar(2027)
+    supply_df, _ = build_electricity_supply(cfg.supply, cal, bundle)
+    stats_df = compute_electricity_price_stats(supply_df, cal["tariff_period"])
+
+    # Debe contener fila Anual (8760 h) + P1 a P6 (7 filas en total)
+    assert len(stats_df) == 7
+    assert stats_df.iloc[0]["period"] == "Anual (8760 h)"
+    assert stats_df.iloc[0]["hours"] == 8760
+    assert list(stats_df["period"].iloc[1:]) == ["P1", "P2", "P3", "P4", "P5", "P6"]
+    assert stats_df["hours"].iloc[1:].sum() == 8760
+
+    # Para cada fila: P10 <= P50 <= P90 tanto en Pool como en Precio Completo
+    for _, row in stats_df.iterrows():
+        assert row["pool_p10_eur_per_mwh_e"] <= row["pool_p50_eur_per_mwh_e"] <= row["pool_p90_eur_per_mwh_e"]
+        assert (
+            row["full_price_p10_eur_per_mwh_e"]
+            <= row["full_price_p50_eur_per_mwh_e"]
+            <= row["full_price_p90_eur_per_mwh_e"]
+        )
+        # La media del precio completo debe coincidir con la suma de las medias de los componentes
+        expected_full_mean = (
+            row["pool_mean_eur_per_mwh_e"]
+            + row["network_tariff_mean_eur_per_mwh_e"]
+            + row["adjustment_mean_eur_per_mwh_e"]
+            + row["grid_other_cost_mean_eur_per_mwh_e"]
+            + row["guarantees_of_origin_mean_eur_per_mwh_e"]
+        )
+        assert pytest.approx(row["full_price_mean_eur_per_mwh_e"], abs=1e-4) == expected_full_mean
+
+
+def test_captured_electricity_price_calculation():
+    from data.loaders import load_data_bundle
+    from models.inputs import ScenarioConfig
+    from results.comparisons import run_simulation
+
+    bundle = load_data_bundle(use_cache=True)
+    cfg = ScenarioConfig()
+    cfg.simulation.simulation_years = 1
+    cfg.supply.pool_missing_data_fill_authorized = True
+    res = run_simulation(cfg, bundle)
+    assert res.is_valid
+    y1 = res.first_year.annual
+
+    elec_cons_total = y1["annual_grid_consumption_mwh_e"] + y1["annual_pv_consumption_mwh_e"]
+    elec_cost_total = y1["annual_total_electricity_cost_eur"]
+    assert elec_cons_total > 0
+    expected_captured_price = elec_cost_total / elec_cons_total
+
+    assert "annual_captured_electricity_price_eur_per_mwh_e" in y1
+    assert pytest.approx(y1["annual_captured_electricity_price_eur_per_mwh_e"], rel=1e-5) == expected_captured_price
+
+
+

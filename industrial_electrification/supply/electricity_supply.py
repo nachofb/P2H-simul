@@ -135,3 +135,99 @@ def build_electricity_supply(
     if df.drop(columns=["grid_capacity_available_mw"]).isna().any().any():
         raise ValueError("Suministro eléctrico: valores nulos en series de precios.")
     return df, notes
+
+
+def _array_stats(arr: np.ndarray) -> tuple[float, float, float, float]:
+    """Devuelve (media, P10, P50, P90) de un array numérico, o ceros si está vacío."""
+    if len(arr) == 0:
+        return 0.0, 0.0, 0.0, 0.0
+    mean_val = float(np.mean(arr))
+    p10, p50, p90 = np.percentile(arr, [10, 50, 90])
+    return mean_val, float(p10), float(p50), float(p90)
+
+
+def compute_electricity_price_stats(
+    supply_df: pd.DataFrame,
+    tariff_period: pd.Series | np.ndarray,
+) -> pd.DataFrame:
+    """Calcula estadísticos (Media, P10, P50, P90) de precios eléctricos para el año completo y por periodos P1-P6.
+
+    Distingue entre:
+    - Precio Pool (mercado diario)
+    - Componentes adicionales: Peajes y cargos, Servicios de ajuste, Otros costes de red, Garantías de origen
+    - Precio Completo de Red (All-in = Pool + Peajes y cargos + Ajustes + Otros costes + GdO)
+    """
+    periods = np.asarray(tariff_period, dtype=int)
+    n_total = len(supply_df)
+
+    slices: list[tuple[str, np.ndarray]] = [
+        (f"Anual ({n_total} h)", np.ones(n_total, dtype=bool)),
+    ]
+    for p in range(1, 7):
+        slices.append((f"P{p}", periods == p))
+
+    pool_all = supply_df["pool_price_eur_per_mwh_e"].to_numpy(dtype=float)
+    tariff_all = supply_df["network_tariff_eur_per_mwh_e"].to_numpy(dtype=float)
+    adj_all = supply_df["adjustment_price_eur_per_mwh_e"].to_numpy(dtype=float)
+    other_all = supply_df["grid_other_cost_eur_per_mwh_e"].to_numpy(dtype=float)
+    goo_all = (
+        supply_df["guarantees_of_origin_cost_eur_per_mwh_e"].to_numpy(dtype=float)
+        if "guarantees_of_origin_cost_eur_per_mwh_e" in supply_df.columns
+        else (
+            supply_df["grid_unit_cost_eur_per_mwh_e"].to_numpy(dtype=float)
+            - pool_all
+            - tariff_all
+            - adj_all
+            - other_all
+        )
+    )
+    full_all = supply_df["grid_unit_cost_eur_per_mwh_e"].to_numpy(dtype=float)
+
+    rows = []
+    for label, mask in slices:
+        pool_mean, pool_p10, pool_p50, pool_p90 = _array_stats(pool_all[mask])
+        tar_mean, tar_p10, tar_p50, tar_p90 = _array_stats(tariff_all[mask])
+        adj_mean, adj_p10, adj_p50, adj_p90 = _array_stats(adj_all[mask])
+        oth_mean, oth_p10, oth_p50, oth_p90 = _array_stats(other_all[mask])
+        goo_mean, goo_p10, goo_p50, goo_p90 = _array_stats(goo_all[mask])
+        full_mean, full_p10, full_p50, full_p90 = _array_stats(full_all[mask])
+
+        rows.append(
+            {
+                "period": label,
+                "hours": int(mask.sum()),
+                # Precio Pool
+                "pool_mean_eur_per_mwh_e": pool_mean,
+                "pool_p10_eur_per_mwh_e": pool_p10,
+                "pool_p50_eur_per_mwh_e": pool_p50,
+                "pool_p90_eur_per_mwh_e": pool_p90,
+                # Peajes y Cargos
+                "network_tariff_mean_eur_per_mwh_e": tar_mean,
+                "network_tariff_p10_eur_per_mwh_e": tar_p10,
+                "network_tariff_p50_eur_per_mwh_e": tar_p50,
+                "network_tariff_p90_eur_per_mwh_e": tar_p90,
+                # Servicios de Ajuste
+                "adjustment_mean_eur_per_mwh_e": adj_mean,
+                "adjustment_p10_eur_per_mwh_e": adj_p10,
+                "adjustment_p50_eur_per_mwh_e": adj_p50,
+                "adjustment_p90_eur_per_mwh_e": adj_p90,
+                # Otros Costes de Red
+                "grid_other_cost_mean_eur_per_mwh_e": oth_mean,
+                "grid_other_cost_p10_eur_per_mwh_e": oth_p10,
+                "grid_other_cost_p50_eur_per_mwh_e": oth_p50,
+                "grid_other_cost_p90_eur_per_mwh_e": oth_p90,
+                # Garantías de Origen (GdO)
+                "guarantees_of_origin_mean_eur_per_mwh_e": goo_mean,
+                "guarantees_of_origin_p10_eur_per_mwh_e": goo_p10,
+                "guarantees_of_origin_p50_eur_per_mwh_e": goo_p50,
+                "guarantees_of_origin_p90_eur_per_mwh_e": goo_p90,
+                # Precio Completo de Red (All-in)
+                "full_price_mean_eur_per_mwh_e": full_mean,
+                "full_price_p10_eur_per_mwh_e": full_p10,
+                "full_price_p50_eur_per_mwh_e": full_p50,
+                "full_price_p90_eur_per_mwh_e": full_p90,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
